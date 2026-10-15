@@ -43,15 +43,19 @@ def describe_all(images: list[dict]) -> dict:
     line downstream. Key the cache by image URL.
     """
     cache = json.loads(CACHE_PATH.read_text()) if CACHE_PATH.exists() else {}
+    total = len(images)
+    print(f"[images] describing {total} images")
 
-    for im in images:
+    for i, im in enumerate(images, start=1):
         src = im["src"]
         if src in cache:
+            print(f"[images] describe {i:4d}/{total} cache hit | {src}")
             continue
         try:
             tmp = Path("data/_tmp_image")
             tmp.write_bytes(requests.get(src, timeout=30).content)
             cache[src] = describe_image(str(tmp), DESCRIPTION_PROMPT)
+            print(f"[images] describe {i:4d}/{total} done      | {src}")
         except Exception as exc:
             print("failed:", src[:70], exc)
 
@@ -66,7 +70,8 @@ def index_descriptions(descriptions: dict, images: list[dict]) -> None:
     by_src = {im["src"]: im for im in images}
     texts, metas, ids = [], [], []
     page_to_image_ids = defaultdict(list)
-    for src, text in descriptions.items():
+    total = len(descriptions)
+    for i, (src, text) in enumerate(descriptions.items(), start=1):
         im = by_src.get(src, {})
         # Alt text and captions are already text and cost nothing to index.
         full = " ".join(filter(None, [im.get("alt"), im.get("caption"), text]))
@@ -76,7 +81,12 @@ def index_descriptions(descriptions: dict, images: list[dict]) -> None:
         metas.append(meta)
         ids.append(image_id)
         page_to_image_ids[meta["url"]].append(image_id)
+        print(
+            f"[images] index {i:4d}/{total} prepared | "
+            f"total prepared={len(ids):4d} | {meta['url']}"
+        )
     store = get_store(reset=False)
+    print(f"[images] writing {len(texts)} image descriptions to Chroma")
     add_to_store(store, texts, metas, ids=ids)
     _attach_images_to_graph(texts, metas, page_to_image_ids)
     print(f"indexed {len(texts)} image descriptions")
@@ -95,9 +105,10 @@ def _attach_images_to_graph(texts: list[str], metas: list[dict], page_to_image_i
         if meta.get("kind") == "text":
             page_to_text_ids[meta.get("url", "")].append(cid)
 
-    for t, m in zip(texts, metas):
+    for i, (t, m) in enumerate(zip(texts, metas), start=1):
         nodes[m["cid"]] = {"text": t, "metadata": m}
         neighbors.setdefault(m["cid"], [])
+        print(f"[graph] node {i:4d}/{len(metas)} added | {m['cid']}")
 
     for page, image_ids in page_to_image_ids.items():
         text_ids = page_to_text_ids.get(page, [])
@@ -108,6 +119,10 @@ def _attach_images_to_graph(texts: list[str], metas: list[dict], page_to_image_i
                 neighbors.setdefault(tid, [])
                 if iid not in neighbors[tid]:
                     neighbors[tid].append(iid)
+        print(
+            f"[graph] linked page nodes | page={page} | "
+            f"images={len(image_ids)} | text_chunks={len(text_ids)}"
+        )
 
     GRAPH_PATH.parent.mkdir(exist_ok=True)
     GRAPH_PATH.write_text(json.dumps(graph))

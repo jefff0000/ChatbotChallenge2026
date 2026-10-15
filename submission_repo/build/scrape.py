@@ -7,6 +7,7 @@ data/pages.json and data/images.json.
 Check for /sitemap.xml before writing a crawler. If it exists it lists
 every page and you can skip the crawl entirely.
 """
+import argparse
 import json
 from collections import deque
 from pathlib import Path
@@ -75,6 +76,7 @@ def crawl(start_url: str, max_pages: int = 3000) -> list[str]:
             continue
 
         out.append(url)
+        print(f"[crawl] {len(out):4d}/{max_pages} accepted | queue={len(queue):4d} | {url}")
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.select("a[href]"):
             link = _normalise(urljoin(url, a["href"]))
@@ -125,17 +127,44 @@ def extract(html: str, url: str) -> dict:
     }
 
 
+def _args():
+    parser = argparse.ArgumentParser(description="Crawl engg.hku.hk pages and extract text/images.")
+    parser.add_argument(
+        "max_pages_positional",
+        nargs="?",
+        type=int,
+        help="Optional positional max pages (e.g. `python build/scrape.py 500`).",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=3000,
+        help="Maximum accepted pages to crawl per seed site (e.g. 500).",
+    )
+    args = parser.parse_args()
+    if args.max_pages_positional is not None:
+        args.max_pages = args.max_pages_positional
+    return args
+
+
 if __name__ == "__main__":
+    args = _args()
     pages = []
     failures = 0
     for site in SITES:
-        for url in crawl(site):
+        print(f"[crawl] seed: {site} (max_pages={args.max_pages})")
+        urls = crawl(site, max_pages=args.max_pages)
+        total = len(urls)
+        print(f"[crawl] accepted {total} pages from seed: {site}")
+        for i, url in enumerate(urls, start=1):
             try:
                 html = _fetch_html(url)
                 if not html:
                     failures += 1
+                    print(f"[extract] {i:4d}/{total} failed fetch | {url}")
                     continue
                 pages.append(extract(html, url))
+                print(f"[extract] {i:4d}/{total} done | pages={len(pages):4d} | {url}")
             except Exception as exc:
                 print("skipped", url, exc)
                 failures += 1
@@ -147,6 +176,7 @@ if __name__ == "__main__":
     Path("data/images.json").write_text(json.dumps(images, indent=1))
 
     print(f"{len(pages)} pages, {len(images)} images")
+    print(f"failed fetch/extract: {failures}")
     if not pages:
         print(
             "No pages were collected. Check DNS/network access, then verify that "

@@ -40,8 +40,11 @@ def build_index(pages: list[dict], reset: bool = True):
     texts, metas, ids = [], [], []
     page_to_ids = defaultdict(list)
     cid = 0
-    for page in pages:
-        for i, piece in enumerate(chunk(page["text"])):
+    total_pages = len(pages)
+    print(f"[index] building chunks from {total_pages} pages")
+    for p_i, page in enumerate(pages, start=1):
+        pieces = chunk(page.get("text", ""))
+        for i, piece in enumerate(pieces):
             chunk_id = f"c{cid}"
             cid += 1
             texts.append(piece)
@@ -56,7 +59,13 @@ def build_index(pages: list[dict], reset: bool = True):
             metas.append(meta)
             ids.append(chunk_id)
             page_to_ids[page["url"]].append(chunk_id)
+        print(
+            f"[index] page {p_i:4d}/{total_pages} | "
+            f"chunks this page={len(pieces):3d} | total chunks={len(texts):5d} | "
+            f"{page.get('url', '?')}"
+        )
     store = get_store(reset=reset)
+    print(f"[index] writing {len(texts)} chunks to Chroma")
     add_to_store(store, texts, metas, ids=ids)
     _write_graphrag(texts, metas, page_to_ids)
     print(f"indexed {len(texts)} chunks")
