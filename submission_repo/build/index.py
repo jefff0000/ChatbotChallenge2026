@@ -7,6 +7,7 @@ Store metadata now. Level 4 questions need to filter by year and page
 type, and adding a field later means rebuilding everything.
 """
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from bot.store import add_to_store, get_store
@@ -31,21 +32,50 @@ def chunk(text: str, size: int = CHUNK_SIZE, overlap: int = OVERLAP) -> list[str
 
 
 def build_index(pages: list[dict], reset: bool = True):
-    texts, metas = [], []
+    texts, metas, ids = [], [], []
+    page_to_ids = defaultdict(list)
+    cid = 0
     for page in pages:
         for i, piece in enumerate(chunk(page["text"])):
+            chunk_id = f"c{cid}"
+            cid += 1
             texts.append(piece)
-            metas.append({
+            meta = {
                 "url":      page["url"],
                 "title":    page.get("title", ""),
                 "position": i,
+                "cid":      chunk_id,
                 "kind":     "text",
                 # TODO add "year" and "page_type" here. Level 4 needs them.
-            })
+            }
+            metas.append(meta)
+            ids.append(chunk_id)
+            page_to_ids[page["url"]].append(chunk_id)
     store = get_store(reset=reset)
-    add_to_store(store, texts, metas)
+    add_to_store(store, texts, metas, ids=ids)
+    _write_graphrag(texts, metas, page_to_ids)
     print(f"indexed {len(texts)} chunks")
     return store
+
+
+def _write_graphrag(texts: list[str], metas: list[dict], page_to_ids: dict) -> None:
+    nodes = {}
+    neighbors = defaultdict(list)
+    for t, m in zip(texts, metas):
+        nodes[m["cid"]] = {"text": t, "metadata": m}
+
+    for ids in page_to_ids.values():
+        for i, cid in enumerate(ids):
+            if i > 0:
+                neighbors[cid].append(ids[i - 1])
+            if i + 1 < len(ids):
+                neighbors[cid].append(ids[i + 1])
+
+    Path("data").mkdir(exist_ok=True)
+    Path("data/graphrag.json").write_text(json.dumps({
+        "nodes": nodes,
+        "neighbors": neighbors,
+    }))
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ import json
 from pathlib import Path
 
 import requests
+import torch
+from PIL import Image
+from transformers import CLIPModel, CLIPProcessor
 
 from bot.llm import describe_image
 from bot.store import add_to_store, get_store
@@ -27,6 +30,8 @@ What would this prompt have to ask for so that both are answerable?
 """
 
 CACHE_PATH = Path("data/descriptions.json")
+CLIP_INDEX_PATH = Path("data/clip_image_index.json")
+CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 
 
 def describe_all(images: list[dict]) -> dict:
@@ -69,7 +74,38 @@ def index_descriptions(descriptions: dict, images: list[dict]) -> None:
     print(f"indexed {len(texts)} image descriptions")
 
 
+def build_clip_index(descriptions: dict, images: list[dict]) -> None:
+    """Build CLIP embedding index for image retrieval at runtime."""
+    model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)
+    processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+    model.eval()
+
+    index = []
+    for im in images:
+        src = im["src"]
+        try:
+            img = Image.open(requests.get(src, timeout=30, stream=True).raw).convert("RGB")
+            with torch.no_grad():
+                inp = processor(images=img, return_tensors="pt")
+                emb = model.get_image_features(**inp)[0].cpu().tolist()
+            index.append({
+                "src": src,
+                "page": im.get("page", src),
+                "alt": im.get("alt", ""),
+                "caption": im.get("caption", ""),
+                "description": descriptions.get(src, ""),
+                "embedding": emb,
+            })
+        except Exception as exc:
+            print("clip failed:", src[:70], exc)
+
+    CLIP_INDEX_PATH.parent.mkdir(exist_ok=True)
+    CLIP_INDEX_PATH.write_text(json.dumps(index))
+    print(f"indexed {len(index)} CLIP image embeddings")
+
+
 if __name__ == "__main__":
     images = json.loads(Path("data/images.json").read_text())
     descriptions = describe_all(images)
     index_descriptions(descriptions, images)
+    build_clip_index(descriptions, images)
