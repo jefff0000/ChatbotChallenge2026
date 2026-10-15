@@ -9,6 +9,7 @@ every page and you can skip the crawl entirely.
 """
 import argparse
 import json
+import time
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -44,19 +45,36 @@ def _bad_page(html: str) -> bool:
     return any(any(n in c for n in needles) for c in checks if c)
 
 
-def _fetch_html(url: str, timeout: int = 20) -> Optional[str]:
-    try:
-        r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 ChatbotChallengeCrawler/1.0"})
-    except Exception:
-        return None
-    if r.status_code != 200:
-        return None
-    ctype = r.headers.get("content-type", "").lower()
-    if "text/html" not in ctype:
-        return None
-    if _bad_page(r.text):
-        return None
-    return r.text
+def _fetch_html(url: str, timeout: int = 20, retries: int = 3, log_prefix: str = "") -> Optional[str]:
+    headers = {"User-Agent": "Mozilla/5.0 ChatbotChallengeCrawler/1.0"}
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(url, timeout=timeout, headers=headers)
+        except Exception as exc:
+            print(f"{log_prefix}[http] error attempt {attempt}/{retries} | {url} | {type(exc).__name__}")
+            if attempt < retries:
+                time.sleep(0.4 * attempt)
+            continue
+
+        if r.status_code == 500:
+            print(f"{log_prefix}[http] 500 attempt {attempt}/{retries} | {url}")
+            if attempt < retries:
+                time.sleep(0.4 * attempt)
+                continue
+            return None
+        if r.status_code != 200:
+            print(f"{log_prefix}[http] {r.status_code} skip | {url}")
+            return None
+
+        ctype = r.headers.get("content-type", "").lower()
+        if "text/html" not in ctype:
+            print(f"{log_prefix}[http] non-html skip ({ctype or 'unknown'}) | {url}")
+            return None
+        if _bad_page(r.text):
+            print(f"{log_prefix}[http] page-not-found pattern skip | {url}")
+            return None
+        return r.text
+    return None
 
 
 def crawl(start_url: str, max_pages: int = 3000) -> list[str]:
@@ -71,7 +89,7 @@ def crawl(start_url: str, max_pages: int = 3000) -> list[str]:
         seen.add(url)
         if not _allowed_host(urlparse(url).hostname):
             continue
-        html = _fetch_html(url)
+        html = _fetch_html(url, log_prefix="[crawl] ")
         if not html:
             continue
 
@@ -158,7 +176,7 @@ if __name__ == "__main__":
         print(f"[crawl] accepted {total} pages from seed: {site}")
         for i, url in enumerate(urls, start=1):
             try:
-                html = _fetch_html(url)
+                html = _fetch_html(url, log_prefix="[extract] ")
                 if not html:
                     failures += 1
                     print(f"[extract] {i:4d}/{total} failed fetch | {url}")
