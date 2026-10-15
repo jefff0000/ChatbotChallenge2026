@@ -35,13 +35,17 @@ def _allowed_host(hostname: Optional[str]) -> bool:
 
 
 def _bad_page(html: str) -> bool:
-    text = html.lower()
-    return "wordpress error" in text or "page not found" in text
+    soup = BeautifulSoup(html, "html.parser")
+    title = (soup.title.get_text(" ", strip=True).lower() if soup.title else "")
+    heading = " ".join(h.get_text(" ", strip=True).lower() for h in soup.select("h1, h2")[:2])
+    checks = [title, heading]
+    needles = ("wordpress error", "page not found", "404 not found")
+    return any(any(n in c for n in needles) for c in checks if c)
 
 
 def _fetch_html(url: str, timeout: int = 20) -> Optional[str]:
     try:
-        r = requests.get(url, timeout=timeout)
+        r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 ChatbotChallengeCrawler/1.0"})
     except Exception:
         return None
     if r.status_code != 200:
@@ -123,15 +127,18 @@ def extract(html: str, url: str) -> dict:
 
 if __name__ == "__main__":
     pages = []
+    failures = 0
     for site in SITES:
         for url in crawl(site):
             try:
                 html = _fetch_html(url)
                 if not html:
+                    failures += 1
                     continue
                 pages.append(extract(html, url))
             except Exception as exc:
                 print("skipped", url, exc)
+                failures += 1
 
     Path("data").mkdir(exist_ok=True)
     Path("data/pages.json").write_text(json.dumps(pages, indent=1))
@@ -140,3 +147,8 @@ if __name__ == "__main__":
     Path("data/images.json").write_text(json.dumps(images, indent=1))
 
     print(f"{len(pages)} pages, {len(images)} images")
+    if not pages:
+        print(
+            "No pages were collected. Check DNS/network access, then verify that "
+            "the start URL is reachable and returns HTTP 200 HTML."
+        )

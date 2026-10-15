@@ -9,10 +9,15 @@ Never describe an image while answering a question. Ingestion time is
 unlimited; runtime is 30 seconds.
 """
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from bot.llm import describe_image
 from bot.store import add_to_store, get_store

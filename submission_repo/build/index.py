@@ -7,8 +7,13 @@ Store metadata now. Level 4 questions need to filter by year and page
 type, and adding a field later means rebuilding everything.
 """
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from bot.store import add_to_store, get_store
 
