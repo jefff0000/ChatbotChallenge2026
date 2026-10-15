@@ -8,6 +8,3 @@ beautifulsoup4>=4.12
 requests>=2.31
 python-dotenv>=1.0
 jupyter>=1.0
-torch>=2.2
-transformers>=4.45
-pillow>=10.0

@@ -8,39 +8,78 @@ Check for /sitemap.xml before writing a crawler. If it exists it lists
 every page and you can skip the crawl entirely.
 """
 import json
+from collections import deque
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from typing import Optional
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
 
 SITES = [
-    # TODO: the two Inno Wing sites you were given
+    "https://innoacademy.engg.hku.hk/",
 ]
 
 
-def crawl(start_url: str, max_pages: int = 500) -> list[str]:
-    """Return every page URL on the same site as start_url."""
-    seen, queue, out = set(), [start_url], []
-    domain = urlparse(start_url).netloc
+def _normalise(url: str) -> str:
+    p = urlparse(url)
+    clean = p._replace(fragment="", query="")
+    u = urlunparse(clean)
+    return u[:-1] if u.endswith("/") else u
+
+
+def _allowed_host(hostname: Optional[str]) -> bool:
+    if not hostname:
+        return False
+    return hostname == "engg.hku.hk" or hostname.endswith(".engg.hku.hk")
+
+
+def _bad_page(html: str) -> bool:
+    text = html.lower()
+    return "wordpress error" in text or "page not found" in text
+
+
+def _fetch_html(url: str, timeout: int = 20) -> Optional[str]:
+    try:
+        r = requests.get(url, timeout=timeout)
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    ctype = r.headers.get("content-type", "").lower()
+    if "text/html" not in ctype:
+        return None
+    if _bad_page(r.text):
+        return None
+    return r.text
+
+
+def crawl(start_url: str, max_pages: int = 3000) -> list[str]:
+    """Return every valid page URL under *.engg.hku.hk."""
+    seen, out = set(), []
+    queue = deque([_normalise(start_url)])
 
     while queue and len(out) < max_pages:
-        url = queue.pop(0)
+        url = queue.popleft()
         if url in seen:
             continue
         seen.add(url)
-        try:
-            html = requests.get(url, timeout=20).text
-        except Exception:
+        if not _allowed_host(urlparse(url).hostname):
             continue
-        out.append(url)
+        html = _fetch_html(url)
+        if not html:
+            continue
 
-        # TODO find the links on this page and add the internal ones to
-        # TODO queue, something like:
-        # for a in BeautifulSoup(html, "html.parser").select("a[href]"):
-        #     link = urljoin(url, a["href"]).split("#")[0]
-        #     if urlparse(link).netloc == domain and link not in seen:
-        #         queue.append(link)
+        out.append(url)
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.select("a[href]"):
+            link = _normalise(urljoin(url, a["href"]))
+            if urlparse(link).scheme not in ("http", "https"):
+                continue
+            if not _allowed_host(urlparse(link).hostname):
+                continue
+            if link not in seen:
+                queue.append(link)
 
     return out
 
@@ -87,7 +126,10 @@ if __name__ == "__main__":
     for site in SITES:
         for url in crawl(site):
             try:
-                pages.append(extract(requests.get(url, timeout=20).text, url))
+                html = _fetch_html(url)
+                if not html:
+                    continue
+                pages.append(extract(html, url))
             except Exception as exc:
                 print("skipped", url, exc)
 

@@ -11,7 +11,7 @@ import sys
 
 def check_imports():
     missing = []
-    for mod in ("openai", "chromadb", "bs4", "requests", "dotenv", "torch", "transformers", "PIL"):
+    for mod in ("openai", "chromadb", "bs4", "requests", "dotenv"):
         try:
             __import__(mod)
         except ImportError:

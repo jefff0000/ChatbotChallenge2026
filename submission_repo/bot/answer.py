@@ -5,7 +5,6 @@ other line in this file, and every file under build/, is yours to
 rewrite.
 """
 from bot.llm import chat
-from bot.clip_retrieval import retrieve_images
 from bot.graphrag import expand_chunks
 from bot.store import get_store, query
 
@@ -26,7 +25,6 @@ Never reply that you do not know."""
 CONFIG = {
     "k": 5,   # try 3 to 10, tuned in Workshop 1 block 5
     "graph_extra": 3,
-    "clip_k": 2,
 }
 
 
@@ -50,7 +48,6 @@ def rag_answer(question: str) -> str:
     """
     chunks = retrieve(question)
     chunks = expand_chunks(chunks, max_extra=CONFIG["graph_extra"])
-    image_hits = retrieve_images(question, top_k=CONFIG["clip_k"])
 
     # TODO [W2 b4] once this works: decompose compound questions,
     # TODO retrieve wide then filter, or filter by metadata before
@@ -59,11 +56,6 @@ def rag_answer(question: str) -> str:
     context_parts = [
         f"[{c['metadata'].get('url', '?')}]\n{c['text']}" for c in chunks
     ]
-    for hit in image_hits:
-        context_parts.append(
-            f"[{hit.get('url', '?')}]\n"
-            f"Image clue: {hit.get('alt', '')} {hit.get('caption', '')} {hit.get('description', '')}"
-        )
     context = "\n\n".join(context_parts)
 
     reply = chat([

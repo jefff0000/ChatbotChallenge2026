@@ -9,12 +9,10 @@ Never describe an image while answering a question. Ingestion time is
 unlimited; runtime is 30 seconds.
 """
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import requests
-import torch
-from PIL import Image
-from transformers import CLIPModel, CLIPProcessor
 
 from bot.llm import describe_image
 from bot.store import add_to_store, get_store
@@ -30,8 +28,7 @@ What would this prompt have to ask for so that both are answerable?
 """
 
 CACHE_PATH = Path("data/descriptions.json")
-CLIP_INDEX_PATH = Path("data/clip_image_index.json")
-CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+GRAPH_PATH = Path("data/graphrag.json")
 
 
 def describe_all(images: list[dict]) -> dict:
@@ -62,50 +59,56 @@ def describe_all(images: list[dict]) -> dict:
 def index_descriptions(descriptions: dict, images: list[dict]) -> None:
     """Add descriptions to the same store as the scraped text."""
     by_src = {im["src"]: im for im in images}
-    texts, metas = [], []
+    texts, metas, ids = [], [], []
+    page_to_image_ids = defaultdict(list)
     for src, text in descriptions.items():
         im = by_src.get(src, {})
         # Alt text and captions are already text and cost nothing to index.
         full = " ".join(filter(None, [im.get("alt"), im.get("caption"), text]))
+        image_id = f"img_{len(ids)}"
         texts.append(full)
-        metas.append({"url": im.get("page", src), "image": src, "kind": "image"})
+        meta = {"url": im.get("page", src), "image": src, "kind": "image", "cid": image_id}
+        metas.append(meta)
+        ids.append(image_id)
+        page_to_image_ids[meta["url"]].append(image_id)
     store = get_store(reset=False)
-    add_to_store(store, texts, metas, ids=[f"img_{i}" for i in range(len(texts))])
+    add_to_store(store, texts, metas, ids=ids)
+    _attach_images_to_graph(texts, metas, page_to_image_ids)
     print(f"indexed {len(texts)} image descriptions")
 
 
-def build_clip_index(descriptions: dict, images: list[dict]) -> None:
-    """Build CLIP embedding index for image retrieval at runtime."""
-    model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)
-    processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
-    model.eval()
+def _attach_images_to_graph(texts: list[str], metas: list[dict], page_to_image_ids: dict) -> None:
+    graph = {"nodes": {}, "neighbors": {}}
+    if GRAPH_PATH.exists():
+        graph = json.loads(GRAPH_PATH.read_text())
+    nodes = graph.setdefault("nodes", {})
+    neighbors = graph.setdefault("neighbors", {})
 
-    index = []
-    for im in images:
-        src = im["src"]
-        try:
-            img = Image.open(requests.get(src, timeout=30, stream=True).raw).convert("RGB")
-            with torch.no_grad():
-                inp = processor(images=img, return_tensors="pt")
-                emb = model.get_image_features(**inp)[0].cpu().tolist()
-            index.append({
-                "src": src,
-                "page": im.get("page", src),
-                "alt": im.get("alt", ""),
-                "caption": im.get("caption", ""),
-                "description": descriptions.get(src, ""),
-                "embedding": emb,
-            })
-        except Exception as exc:
-            print("clip failed:", src[:70], exc)
+    page_to_text_ids = defaultdict(list)
+    for cid, node in nodes.items():
+        meta = node.get("metadata", {})
+        if meta.get("kind") == "text":
+            page_to_text_ids[meta.get("url", "")].append(cid)
 
-    CLIP_INDEX_PATH.parent.mkdir(exist_ok=True)
-    CLIP_INDEX_PATH.write_text(json.dumps(index))
-    print(f"indexed {len(index)} CLIP image embeddings")
+    for t, m in zip(texts, metas):
+        nodes[m["cid"]] = {"text": t, "metadata": m}
+        neighbors.setdefault(m["cid"], [])
+
+    for page, image_ids in page_to_image_ids.items():
+        text_ids = page_to_text_ids.get(page, [])
+        for iid in image_ids:
+            for tid in text_ids:
+                if tid not in neighbors[iid]:
+                    neighbors[iid].append(tid)
+                neighbors.setdefault(tid, [])
+                if iid not in neighbors[tid]:
+                    neighbors[tid].append(iid)
+
+    GRAPH_PATH.parent.mkdir(exist_ok=True)
+    GRAPH_PATH.write_text(json.dumps(graph))
 
 
 if __name__ == "__main__":
     images = json.loads(Path("data/images.json").read_text())
     descriptions = describe_all(images)
     index_descriptions(descriptions, images)
-    build_clip_index(descriptions, images)
